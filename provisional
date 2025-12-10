@@ -1,0 +1,131 @@
+import time
+
+from bitalino import BITalino
+import numpy as np
+from numpy import loadtxt
+from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks
+import serial
+import time
+
+ser = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
+time.sleep(2)
+
+#file = open("SampleECG.txt", "w")
+
+macAddress = "84:BA:20:5E:FF:F0"
+
+running_time = 5 # This example will collect data for 5 sec.
+
+batteryThreshold = 30
+acqChannels = [0, 1, 2, 3, 4, 5]
+samplingRate = 1000
+nSamples = 10
+digitalOutput_on = [1, 1]
+digitalOutput_off = [0, 0]
+
+VCC = 3.3
+G_ECG = 1100
+n_bits = 10
+
+device = BITalino(macAddress) # Connect to BITalino
+device.battery(batteryThreshold) # Set battery threshold
+
+print(device.version()) # Read BITalino version
+device.start(samplingRate, acqChannels) # Start Acquisition
+
+#device.start(samplingRate, [0]) # Start Acquisition
+
+ecg_data_mv = []
+
+start = time.time()
+end = time.time()
+
+while (end - start) < running_time:
+    samples = device.read(nSamples)
+    
+    s = str(samples)
+    s = s.replace("[", "")
+    s = s.replace("]", "")
+        
+    #file.write("".join(map(str, s)) + "\n")
+    
+    for sample in samples:
+        raw_value = sample[-1] # entre 0 i 1023 (2^10=1024)        
+        ecg_v = ((raw_value/(2**n_bits))-0.5)*VCC/G_ECG
+        ecg_mv = ecg_v * 1000
+        #print(ecg_mv)
+                
+    end = time.time()
+
+#file.close()
+
+x=loadtxt("prueba.txt")[:,-1]
+plt.plot(x[-15000:-4000]/1024./1.1*3.3-1.5, 'k')
+plt.ylim([-1.5,1.5])
+plt.ylabel('mV')
+plt.xlabel('t (ms)')
+plt.savefig('SampleECG.png',dpi=300)
+
+
+data = np.loadtxt("prueba.txt", comments="#")
+ecg = x[-15000:-4000]/1024./1.1*3.3-1.5
+threshold = np.mean(ecg) + 2*np.std(ecg)
+peaks, _ = find_peaks(ecg,
+                    height=threshold,
+                    distance=int(0.25*samplingRate))
+rr_intervals = np.diff(peaks)/samplingRate
+bpm_instant = 60/rr_intervals
+bpm_mean = np.mean(bpm_instant)
+
+print("picos:", len(peaks))
+print("Bpm promedio:", bpm_mean)
+
+
+try:
+    while True:
+        mensaje = f"{bpm_mean}\n"
+        ser.write(mensaje.encode('utf-8'))
+        time.sleep(120) #5 min
+except KeyboardInterrupt:
+    print("error")
+finally:
+    ser.close()
+
+
+device.trigger(digitalOutput_on) # Turn BITalino led and buzzer on
+time.sleep(running_time) # Script sleeps for n seconds
+device.trigger(digitalOutput_off) # Turn BITalino led and buzzer off
+device.stop() # Stop acquisition
+device.close() # Close connection
+
+
+
+
+
+
+
+
+
+
+
+from bitalino import BITalino
+import numpy as np
+from numpy import loadtxt
+from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks
+import serial
+import time
+
+ser = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
+time.sleep(2)
+
+x=loadtxt('SampleECG.txt')[:,-1]
+#sx=smooth(x,50)
+plot(x[-9000:-4000]/1024./1.1*3.3-1.5, 'k')
+ylim([-1.5,1.5])
+ylabel('mV')
+xlabel('t (ms)')
+savefig('SampleECG.png',dpi=300)
