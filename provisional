@@ -1,131 +1,53 @@
-import time
-
-from bitalino import BITalino
 import numpy as np
-from numpy import loadtxt
-from matplotlib import pyplot as plt
-import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 import serial
 import time
 
-ser = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
-time.sleep(2)
+# === CONFIGURACIÓN ===
+FILE_NAME = "prueba.txt"     # Cambia si tu archivo se llama distinto
+SAMPLING_RATE = 1000         # Hz (como en tu código original)
+SERIAL_PORT = "/dev/ttyACM0" # Puerto serie
+BAUDRATE = 115200
+SLEEP_SECONDS = 120          # Cada cuánto se envía (2 min)
 
-#file = open("SampleECG.txt", "w")
+# === CARGA DE DATOS DESDE TXT ===
+# Se asume que la señal ECG está en la última columna
+data = np.loadtxt(FILE_NAME, comments="#")
+x = data[:, -1]
 
-macAddress = "84:BA:20:5E:FF:F0"
+# Mismo trozo que usabas antes: [-15000:-4000]
+ecg = x[-15000:-4000] / 1024.0 / 1.1 * 3.3 - 1.5
 
-running_time = 5 # This example will collect data for 5 sec.
+# === CÁLCULO DEL BPM MEDIO ===
+threshold = np.mean(ecg) + 2 * np.std(ecg)
 
-batteryThreshold = 30
-acqChannels = [0, 1, 2, 3, 4, 5]
-samplingRate = 1000
-nSamples = 10
-digitalOutput_on = [1, 1]
-digitalOutput_off = [0, 0]
+peaks, _ = find_peaks(
+    ecg,
+    height=threshold,
+    distance=int(0.25 * SAMPLING_RATE)  # mínimo 250 ms entre picos (~240 bpm máx)
+)
 
-VCC = 3.3
-G_ECG = 1100
-n_bits = 10
+if len(peaks) < 2:
+    raise RuntimeError("No hay suficientes picos para calcular BPM.")
 
-device = BITalino(macAddress) # Connect to BITalino
-device.battery(batteryThreshold) # Set battery threshold
-
-print(device.version()) # Read BITalino version
-device.start(samplingRate, acqChannels) # Start Acquisition
-
-#device.start(samplingRate, [0]) # Start Acquisition
-
-ecg_data_mv = []
-
-start = time.time()
-end = time.time()
-
-while (end - start) < running_time:
-    samples = device.read(nSamples)
-    
-    s = str(samples)
-    s = s.replace("[", "")
-    s = s.replace("]", "")
-        
-    #file.write("".join(map(str, s)) + "\n")
-    
-    for sample in samples:
-        raw_value = sample[-1] # entre 0 i 1023 (2^10=1024)        
-        ecg_v = ((raw_value/(2**n_bits))-0.5)*VCC/G_ECG
-        ecg_mv = ecg_v * 1000
-        #print(ecg_mv)
-                
-    end = time.time()
-
-#file.close()
-
-x=loadtxt("prueba.txt")[:,-1]
-plt.plot(x[-15000:-4000]/1024./1.1*3.3-1.5, 'k')
-plt.ylim([-1.5,1.5])
-plt.ylabel('mV')
-plt.xlabel('t (ms)')
-plt.savefig('SampleECG.png',dpi=300)
-
-
-data = np.loadtxt("prueba.txt", comments="#")
-ecg = x[-15000:-4000]/1024./1.1*3.3-1.5
-threshold = np.mean(ecg) + 2*np.std(ecg)
-peaks, _ = find_peaks(ecg,
-                    height=threshold,
-                    distance=int(0.25*samplingRate))
-rr_intervals = np.diff(peaks)/samplingRate
-bpm_instant = 60/rr_intervals
+rr_intervals = np.diff(peaks) / SAMPLING_RATE  # en segundos
+bpm_instant = 60.0 / rr_intervals
 bpm_mean = np.mean(bpm_instant)
 
-print("picos:", len(peaks))
-print("Bpm promedio:", bpm_mean)
+print("Picos detectados:", len(peaks))
+print("BPM medio:", bpm_mean)
 
+# === ENVÍO POR SERIAL DEL BPM MEDIO ===
+ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=1)
+time.sleep(2)  # pequeña espera para que el puerto esté listo
 
 try:
     while True:
-        mensaje = f"{bpm_mean}\n"
-        ser.write(mensaje.encode('utf-8'))
-        time.sleep(120) #5 min
+        mensaje = f"{bpm_mean:.2f}\n"
+        ser.write(mensaje.encode("utf-8"))
+        print("Enviado:", mensaje.strip())
+        time.sleep(SLEEP_SECONDS)
 except KeyboardInterrupt:
-    print("error")
+    print("Detenido por teclado.")
 finally:
     ser.close()
-
-
-device.trigger(digitalOutput_on) # Turn BITalino led and buzzer on
-time.sleep(running_time) # Script sleeps for n seconds
-device.trigger(digitalOutput_off) # Turn BITalino led and buzzer off
-device.stop() # Stop acquisition
-device.close() # Close connection
-
-
-
-
-
-
-
-
-
-
-
-from bitalino import BITalino
-import numpy as np
-from numpy import loadtxt
-from matplotlib import pyplot as plt
-import matplotlib.pyplot as plt
-from scipy.signal import find_peaks
-import serial
-import time
-
-ser = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
-time.sleep(2)
-
-x=loadtxt('SampleECG.txt')[:,-1]
-#sx=smooth(x,50)
-plot(x[-9000:-4000]/1024./1.1*3.3-1.5, 'k')
-ylim([-1.5,1.5])
-ylabel('mV')
-xlabel('t (ms)')
-savefig('SampleECG.png',dpi=300)
