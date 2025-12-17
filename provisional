@@ -1,151 +1,134 @@
 import time
-
-from bitalino import BITalino
 import numpy as np
-from numpy import loadtxt
-from matplotlib import pyplot as plt
-import matplotlib.pyplot as plt
+from bitalino import BITalino
 from scipy.signal import find_peaks
 import serial
-import time
 
-ser = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
-time.sleep(2)
+# =========================
+# CONFIG
+# =========================
+DNI = "123456789"                   # <-- CAMBIA ESTO (9 dígitos)
+MAC_ADDRESS = "84:BA:20:5E:FF:F0"
 
-#file = open("SampleECG.txt", "w")
-
-macAddress = "84:BA:20:5E:FF:F0"
-
-running_time = 5 # This example will collect data for 5 sec.
-
-batteryThreshold = 30
-acqChannels = [0, 1, 2, 3, 4, 5]
-samplingRate = 1000
-nSamples = 10
-digitalOutput_on = [1, 1]
-digitalOutput_off = [0, 0]
-
-VCC = 3.3
-G_ECG = 1100
-n_bits = 10
-
-device = BITalino(macAddress) # Connect to BITalino
-device.battery(batteryThreshold) # Set battery threshold
-
-print(device.version()) # Read BITalino version
-device.start(samplingRate, acqChannels) # Start Acquisition
-
-#device.start(samplingRate, [0]) # Start Acquisition
-
-ecg_data_mv = []
-
-start = time.time()
-end = time.time()
-
-while (end - start) < running_time:
-    samples = device.read(nSamples)
-    
-    s = str(samples)
-    s = s.replace("[", "")
-    s = s.replace("]", "")
-        
-    #file.write("".join(map(str, s)) + "\n")
-    
-    for sample in samples:
-        raw_value = sample[-1] # entre 0 i 1023 (2^10=1024)        
-        ecg_v = ((raw_value/(2**n_bits))-0.5)*VCC/G_ECG
-        ecg_mv = ecg_v * 1000
-        #print(ecg_mv)
-                
-    end = time.time()
-
-#file.close()
-
-x=loadtxt("prueba.txt")[:,-1]
-plt.plot(x[-15000:-4000]/1024./1.1*3.3-1.5, 'k')
-plt.ylim([-1.5,1.5])
-plt.ylabel('mV')
-plt.xlabel('t (ms)')
-plt.savefig('SampleECG.png',dpi=300)
-
-
-data = np.loadtxt("prueba.txt", comments="#")
-ecg = x[-15000:-4000]/1024./1.1*3.3-1.5
-threshold = np.mean(ecg) + 2*np.std(ecg)
-peaks, _ = find_peaks(ecg,
-                    height=threshold,
-                    distance=int(0.25*samplingRate))
-rr_intervals = np.diff(peaks)/samplingRate
-bpm_instant = 60/rr_intervals
-bpm_mean = np.mean(bpm_instant)
-
-print("picos:", len(peaks))
-print("Bpm promedio:", bpm_mean)
-
-
-try:
-    while True:
-        mensaje = f"{bpm_mean}\n"
-        ser.write(mensaje.encode('utf-8'))
-        time.sleep(120) #5 min
-except KeyboardInterrupt:
-    print("error")
-finally:
-    ser.close()
-
-
-device.trigger(digitalOutput_on) # Turn BITalino led and buzzer on
-time.sleep(running_time) # Script sleeps for n seconds
-device.trigger(digitalOutput_off) # Turn BITalino led and buzzer off
-device.stop() # Stop acquisition
-
-
-
-
-
-
-
-
-import numpy as np
-import serial
-import time
-
-FILE_NAME = "SampleEDA.txt"  
 SERIAL_PORT = "/dev/ttyACM0"
 BAUDRATE = 115200
-SLEEP_SECONDS = 120          
+SEND_EVERY_SECONDS = 120
 
+# BITalino
+batteryThreshold = 30
+samplingRate = 1000
+nSamples = 10
+running_time_ecg = 5                # segundos para medir ECG
+
+# Canales (ajusta si hace falta)
+acqChannels = [0, 1, 2, 3, 4, 5]
+
+# ECG conversión
 VCC = 3.3
-N_BITS = 10             
+G_ECG = 1100
+N_BITS = 10
 
-data = np.loadtxt(FILE_NAME, comments="#")
+# EDA: si lees EDA desde un archivo (como en tu segundo script)
+EDA_FILE_NAME = "SampleEDA.txt"
 
-# Si es una sola columna -> 1D; si tiene más columnas -> última columna
-if data.ndim == 1:
-    eda_raw = data
-else:
-    eda_raw = data[:, -1]
+# Formato EDA en uS (la fórmula que estabas usando)
+def eda_to_microsiemens(eda_raw_adc: np.ndarray) -> float:
+    eda_v = eda_raw_adc / (2**N_BITS) * VCC
+    eda_mean = float(np.mean(eda_v))
+    micro_siemens = 20 * (eda_mean - 0.5)
+    if micro_siemens < 0:
+        micro_siemens = 0.0
+    return micro_siemens
 
-eda_v = eda_raw / (2**N_BITS) * VCC
-eda_mean = np.mean(eda_v)
+def format_ecg_bpm(bpm: float) -> str:
+    # 3 dígitos + "." + 2 dígitos; si < 100 -> 0 delante (lo logra {:06.2f})
+    # 95.23 -> "095.23"
+    return f"{bpm:06.2f}"
 
-micro_siemens = 20 * (eda_mean - 0.5)
-if micro_siemens < 0:
-	micro_siemens = 0.0
+def format_eda_us(us: float) -> str:
+    # 2 dígitos + "." + 2 dígitos -> (00.00 a 99.99)
+    # 3.45 -> "03.45"
+    # si se pasa de 99.99 lo capamos a 99.99 para respetar formato
+    us = max(0.0, min(99.99, us))
+    return f"{us:05.2f}"
 
-print("EDA media (uS):", micro_siemens)
+def compute_bpm_from_ecg(ecg_signal: np.ndarray, fs: int) -> float:
+    # umbral como en tu código
+    threshold = np.mean(ecg_signal) + 2 * np.std(ecg_signal)
 
+    peaks, _ = find_peaks(
+        ecg_signal,
+        height=threshold,
+        distance=int(0.25 * fs)  # mínimo 250ms entre picos
+    )
+
+    if len(peaks) < 2:
+        return 0.0
+
+    rr_intervals = np.diff(peaks) / fs
+    bpm_instant = 60 / rr_intervals
+    return float(np.mean(bpm_instant))
+
+def read_eda_from_file(filename: str) -> float:
+    data = np.loadtxt(filename, comments="#")
+    if data.ndim == 1:
+        eda_raw = data
+    else:
+        eda_raw = data[:, -1]
+    return eda_to_microsiemens(eda_raw)
+
+# =========================
+# MAIN
+# =========================
 ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=1)
 time.sleep(2)
 
+device = BITalino(MAC_ADDRESS)
+device.battery(batteryThreshold)
+print(device.version())
+device.start(samplingRate, acqChannels)
+
 try:
     while True:
-        mensaje = f"{micro_siemens:.4f}\n"
-        ser.write(mensaje.encode("utf-8"))
-        print("Enviado:", mensaje.strip())
-        time.sleep(SLEEP_SECONDS)
+        # --------- ECG: adquirir unos segundos y calcular BPM ---------
+        ecg_raw = []
+
+        start = time.time()
+        while (time.time() - start) < running_time_ecg:
+            samples = device.read(nSamples)
+            for sample in samples:
+                raw_value = sample[-1]  # tu ECG está en la última columna (como lo usabas)
+                ecg_raw.append(raw_value)
+
+        ecg_raw = np.array(ecg_raw, dtype=np.float64)
+
+        # conversión similar a tu línea: x/1024/1.1*3.3 - 1.5
+        # (lo dejo igual para que tus umbrales/picos se comporten parecido)
+        ecg_v = ecg_raw / 1024.0 / 1.1 * 3.3 - 1.5
+
+        bpm_mean = compute_bpm_from_ecg(ecg_v, samplingRate)
+
+        # --------- EDA: leer del archivo y calcular uS ---------
+        micro_siemens = read_eda_from_file(EDA_FILE_NAME)
+
+        # --------- Formateo y envío ---------
+        ecg_str = format_ecg_bpm(bpm_mean)
+        eda_str = format_eda_us(micro_siemens)
+
+        payload = f"{DNI}_{ecg_str}_{eda_str}\n"
+        ser.write(payload.encode("utf-8"))
+        print("Enviado:", payload.strip())
+
+        time.sleep(SEND_EVERY_SECONDS)
+
 except KeyboardInterrupt:
     print("Detenido por teclado.")
 finally:
-    ser.close()
-
+    try:
+        device.stop()
+    except Exception:
+        pass
+    try:
+        ser.close()
+    except Exception:
+        pass
